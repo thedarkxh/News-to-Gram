@@ -1,0 +1,4 @@
+aiogram
+instagrapi
+requests
+python-dotenv
