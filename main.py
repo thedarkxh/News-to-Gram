@@ -1,61 +1,60 @@
 import os
 import textwrap
-from PIL import Image, ImageFilter, ImageDraw, ImageFont
-from aiogram import Bot
+from PIL import Image, ImageDraw, ImageFont
 
-# Configuration
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHANNEL_USERNAME = "@tedsxh"
+def create_premium_card(headline, brief, filename="ig_post.jpg"):
+    # 1. CRITICAL: Create the output directory explicitly
+    output_dir = "output"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"Created directory: {output_dir}")
 
-async def generate_premium_card(headline, brief, tg_image_path):
-    # 1. Open and resize background
-    bg = Image.open(tg_image_path).convert("RGB")
-    bg = bg.resize((1080, 1080), Image.Resampling.LANCZOS)
-    
-    # 2. Create a Blurred Area for Text (Bottom 40%)
-    blur_box = (0, 600, 1080, 1080)
-    region = bg.crop(blur_box)
-    region = region.filter(ImageFilter.GaussianBlur(radius=20))
-    bg.paste(region, blur_box)
-    
-    # 3. Add Dark Overlay for contrast
-    draw = ImageDraw.Draw(bg, 'RGBA')
-    draw.rectangle(blur_box, fill=(0, 0, 0, 100)) # Semi-transparent black
-    
-    # 4. Draw Content
+    # 2. Create the Canvas (Instagram Square)
+    width, height = 1080, 1080
+    # Using a deep dark gradient-like color for a premium feel
+    bg_color = (15, 15, 15) 
+    img = Image.new('RGB', (width, height), color=bg_color)
+    draw = ImageDraw.Draw(img)
+
+    # 3. Font Loading Logic for GitHub Ubuntu Runners
+    # Ubuntu runners have DejaVuSans installed by default
     try:
-        font_h = ImageFont.truetype("DejaVuSans-Bold.ttf", 60)
-        font_b = ImageFont.truetype("DejaVuSans.ttf", 35)
+        font_h = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 75)
+        font_b = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 45)
+        print("Loaded DejaVu fonts.")
     except:
         font_h = ImageFont.load_default()
         font_b = ImageFont.load_default()
+        print("Warning: Using default fonts. Image may look plain.")
 
-    # Draw Headline
-    curr_h = 650
-    for line in textwrap.wrap(headline, width=25):
-        draw.text((60, curr_h), line, font=font_h, fill=(255, 255, 255))
-        curr_h += 75
-        
-    # Draw Brief
-    curr_h += 20
-    for line in textwrap.wrap(brief, width=50):
-        draw.text((60, curr_h), line, font=font_b, fill=(220, 220, 220))
-        curr_h += 45
+    # 4. Draw Accent Element (Left vertical bar)
+    draw.rectangle([40, 150, 55, 400], fill=(0, 120, 255)) # Tech Blue accent
 
-    bg.save("output/ig_post.jpg")
-    return "output/ig_post.jpg"
+    # 5. Draw Headline
+    y_text = 150
+    header_lines = textwrap.wrap(headline, width=20)
+    for line in header_lines:
+        draw.text((80, y_text), line, font=font_h, fill=(255, 255, 255))
+        y_text += 90
 
-async def fetch_latest_news():
-    bot = Bot(token=TELEGRAM_TOKEN)
-    # Get the last message from the channel
-    chat = await bot.get_chat(CHANNEL_USERNAME)
-    # Note: Fetching the actual last message requires a listener or specific ID
-    # For testing, we assume you have the message ID from your bot logic
-    msg_id = 123 
-    tg_link = f"https://t.me/{CHANNEL_USERNAME.replace('@','')}/{msg_id}"
+    # 6. Draw Brief
+    y_text += 60
+    body_lines = textwrap.wrap(brief, width=40)
+    for line in body_lines:
+        draw.text((80, y_text), line, font=font_b, fill=(200, 200, 200))
+        y_text += 60
+
+    # 7. Final Save
+    save_path = os.path.join(output_dir, filename)
+    img.save(save_path, quality=95)
+    print(f"Successfully saved image to: {save_path}")
     
-    # Placeholder for Gemini logic
-    headline = "Opposition Defeats Quota Bill"
-    brief = "The United Opposition has successfully blocked the Constitutional Amendment for Women's Quota in a major legislative shift."
+    # List files to verify for GitHub logs
+    print("Current output directory contents:", os.listdir(output_dir))
+
+if __name__ == "__main__":
+    # Test Content
+    sample_head = "GitHub Actions Fix"
+    sample_brief = "The output directory is now explicitly created and verified. Your artifact will appear in the Summary tab."
     
-    return headline, brief, tg_link
+    create_premium_card(sample_head, sample_brief)
