@@ -1,32 +1,25 @@
-name: Test News Card Generation
+name: Generate IG Preview
 on:
-  workflow_dispatch: # Allows you to trigger it manually
+  workflow_dispatch:
 
 jobs:
-  generate-and-save:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
+      - uses: actions/checkout@v4
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
-      - name: Install Dependencies
-        run: |
-          pip install Pillow requests python-dotenv
-
-      - name: Run Generator
+      - name: Install
+        run: pip install Pillow aiogram python-dotenv
+      - name: Run
         env:
-          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
-
-      - name: Upload Generated Image
-# This step saves the file so you can download it from the Actions tab
+      - name: Save Result
         uses: actions/upload-artifact@v4
         with:
-          name: news-preview
+          name: ig-ready-post
           path: output/
