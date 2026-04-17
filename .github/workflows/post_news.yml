@@ -1,25 +1,43 @@
-name: Generate IG Preview
+name: Generate News Card Artifact
+
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Allows you to run this manually from the Actions tab
+  # Optional: Schedule it to run every day at 8:00 AM UTC
+  # schedule:
+  #   - cron: '0 8 * * *'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Install
-        run: pip install Pillow aiogram python-dotenv
-      - name: Run
+          cache: 'pip' # Speeds up future runs
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install Pillow python-dotenv requests
+
+      - name: Run Card Generator
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          # Add these to your Repo Settings > Secrets > Actions
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         run: python main.py
-      - name: Save Result
+
+      - name: Save Result as Artifact
+        if: always() # Ensures you get logs even if the script partially fails
         uses: actions/upload-artifact@v4
         with:
-          name: ig-ready-post
+          name: news-preview-image
           path: output/
+          if-no-files-found: error # This will make the action fail if the image wasn't created
+          retention-days: 5 # Keeps the preview for 5 days
