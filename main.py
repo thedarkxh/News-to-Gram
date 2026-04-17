@@ -1,60 +1,60 @@
 import os
 import textwrap
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-def create_premium_card(headline, brief, filename="ig_post.jpg"):
-    # 1. CRITICAL: Create the output directory explicitly
-    output_dir = "output"
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-        print(f"Created directory: {output_dir}")
+def create_premium_card(headline, brief, bg_path="background.jpg"):
+    # Create output directory
+    os.makedirs("output", exist_ok=True)
+    
+    # 1. Load Background Image
+    if not os.path.exists(bg_path):
+        # Fallback if you haven't uploaded the image yet
+        print(f"Warning: {bg_path} not found. Creating dark background.")
+        bg = Image.new('RGB', (1080, 1080), color=(20, 20, 20))
+    else:
+        bg = Image.open(bg_path).convert("RGB")
+        bg = bg.resize((1080, 1080), Image.Resampling.LANCZOS)
 
-    # 2. Create the Canvas (Instagram Square)
-    width, height = 1080, 1080
-    # Using a deep dark gradient-like color for a premium feel
-    bg_color = (15, 15, 15) 
-    img = Image.new('RGB', (width, height), color=bg_color)
-    draw = ImageDraw.Draw(img)
+    # 2. Apply Blur to the bottom area (where text will be)
+    # Define the box: (left, top, right, bottom)
+    blur_area = (0, 600, 1080, 1080)
+    region = bg.crop(blur_area)
+    region = region.filter(ImageFilter.GaussianBlur(radius=15))
+    bg.paste(region, blur_area)
 
-    # 3. Font Loading Logic for GitHub Ubuntu Runners
-    # Ubuntu runners have DejaVuSans installed by default
+    # 3. Add a semi-transparent dark overlay to the blurred area
+    overlay = Image.new('RGBA', (1080, 480), (0, 0, 0, 160))
+    bg.paste(overlay, (0, 600), overlay)
+
+    draw = ImageDraw.Draw(bg)
+
+    # 4. Fonts
     try:
-        font_h = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 75)
-        font_b = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 45)
-        print("Loaded DejaVu fonts.")
+        font_h = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 65)
+        font_b = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 40)
     except:
         font_h = ImageFont.load_default()
         font_b = ImageFont.load_default()
-        print("Warning: Using default fonts. Image may look plain.")
 
-    # 4. Draw Accent Element (Left vertical bar)
-    draw.rectangle([40, 150, 55, 400], fill=(0, 120, 255)) # Tech Blue accent
+    # 5. Draw Content
+    y_text = 640
+    for line in textwrap.wrap(headline, width=28):
+        draw.text((60, y_text), line, font=font_h, fill=(255, 255, 255))
+        y_text += 80
 
-    # 5. Draw Headline
-    y_text = 150
-    header_lines = textwrap.wrap(headline, width=20)
-    for line in header_lines:
-        draw.text((80, y_text), line, font=font_h, fill=(255, 255, 255))
-        y_text += 90
+    y_text += 20
+    for line in textwrap.wrap(brief, width=55):
+        draw.text((60, y_text), line, font=font_b, fill=(210, 210, 210))
+        y_text += 50
 
-    # 6. Draw Brief
-    y_text += 60
-    body_lines = textwrap.wrap(brief, width=40)
-    for line in body_lines:
-        draw.text((80, y_text), line, font=font_b, fill=(200, 200, 200))
-        y_text += 60
-
-    # 7. Final Save
-    save_path = os.path.join(output_dir, filename)
-    img.save(save_path, quality=95)
-    print(f"Successfully saved image to: {save_path}")
-    
-    # List files to verify for GitHub logs
-    print("Current output directory contents:", os.listdir(output_dir))
+    # 6. Save
+    save_path = "output/ig_post.jpg"
+    bg.save(save_path, quality=95)
+    print(f"Success! Image saved to {save_path}")
 
 if __name__ == "__main__":
-    # Test Content
-    sample_head = "GitHub Actions Fix"
-    sample_brief = "The output directory is now explicitly created and verified. Your artifact will appear in the Summary tab."
+    # Test Data from your Image 2
+    head = "Opposition Defeats Quota Bill"
+    desc = "The United Opposition has successfully blocked the Constitutional Amendment Bill for Women's Quota. Full story on Telegram."
     
-    create_premium_card(sample_head, sample_brief)
+    create_premium_card(head, desc)
