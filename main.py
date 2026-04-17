@@ -1,44 +1,61 @@
 import os
-from PIL import Image, ImageDraw, ImageFont
 import textwrap
+from PIL import Image, ImageFilter, ImageDraw, ImageFont
+from aiogram import Bot
 
-def create_card(headline, brief, filename):
-    # Setup directory
-    os.makedirs("output", exist_ok=True)
+# Configuration
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHANNEL_USERNAME = "@tedsxh"
+
+async def generate_premium_card(headline, brief, tg_image_path):
+    # 1. Open and resize background
+    bg = Image.open(tg_image_path).convert("RGB")
+    bg = bg.resize((1080, 1080), Image.Resampling.LANCZOS)
     
-    # 1080x1080 is the IG standard
-    img = Image.new('RGB', (1080, 1080), color=(15, 15, 15))
-    draw = ImageDraw.Draw(img)
+    # 2. Create a Blurred Area for Text (Bottom 40%)
+    blur_box = (0, 600, 1080, 1080)
+    region = bg.crop(blur_box)
+    region = region.filter(ImageFilter.GaussianBlur(radius=20))
+    bg.paste(region, blur_box)
     
-    # Try to use a default font logic for GitHub Ubuntu Runners
+    # 3. Add Dark Overlay for contrast
+    draw = ImageDraw.Draw(bg, 'RGBA')
+    draw.rectangle(blur_box, fill=(0, 0, 0, 100)) # Semi-transparent black
+    
+    # 4. Draw Content
     try:
-        # Ubuntu runners usually have DejaVuSans
-        font_head = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 70)
-        font_body = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 40)
+        font_h = ImageFont.truetype("DejaVuSans-Bold.ttf", 60)
+        font_b = ImageFont.truetype("DejaVuSans.ttf", 35)
     except:
-        font_head = ImageFont.load_default()
-        font_body = ImageFont.load_default()
+        font_h = ImageFont.load_default()
+        font_b = ImageFont.load_default()
 
-    # Draw headline (wrapped)
-    y_offset = 200
-    for line in textwrap.wrap(headline, width=20):
-        draw.text((100, y_offset), line, font=font_head, fill=(255, 255, 255))
-        y_offset += 80
+    # Draw Headline
+    curr_h = 650
+    for line in textwrap.wrap(headline, width=25):
+        draw.text((60, curr_h), line, font=font_h, fill=(255, 255, 255))
+        curr_h += 75
+        
+    # Draw Brief
+    curr_h += 20
+    for line in textwrap.wrap(brief, width=50):
+        draw.text((60, curr_h), line, font=font_b, fill=(220, 220, 220))
+        curr_h += 45
 
-    # Draw brief (wrapped)
-    y_offset += 60
-    for line in textwrap.wrap(brief, width=45):
-        draw.text((100, y_offset), line, font=font_body, fill=(200, 200, 200))
-        y_offset += 50
+    bg.save("output/ig_post.jpg")
+    return "output/ig_post.jpg"
 
-    # Save locally
-    save_path = f"output/{filename}"
-    img.save(save_path)
-    print(f"Successfully saved {save_path}")
-
-if __name__ == "__main__":
-    # Test Data
-    test_headline = "GitHub Action Test"
-    test_brief = "This image was generated within a GitHub Ubuntu runner and saved as an artifact for local review."
+async def fetch_latest_news():
+    bot = Bot(token=TELEGRAM_TOKEN)
+    # Get the last message from the channel
+    chat = await bot.get_chat(CHANNEL_USERNAME)
+    # Note: Fetching the actual last message requires a listener or specific ID
+    # For testing, we assume you have the message ID from your bot logic
+    msg_id = 123 
+    tg_link = f"https://t.me/{CHANNEL_USERNAME.replace('@','')}/{msg_id}"
     
-    create_card(test_headline, test_brief, "test_news_card.jpg")
+    # Placeholder for Gemini logic
+    headline = "Opposition Defeats Quota Bill"
+    brief = "The United Opposition has successfully blocked the Constitutional Amendment for Women's Quota in a major legislative shift."
+    
+    return headline, brief, tg_link
