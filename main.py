@@ -2,9 +2,9 @@ import os
 import asyncio
 import requests
 from aiogram import Bot
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-# ── Config ─────────────────────────────────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────────────────
 TOKEN      = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 IG_HANDLE  = "deepdive.group"
@@ -25,8 +25,7 @@ JUNK_KW = ["READ FULL STORY", "RELATED", "JOIN", "SOURCE", "🔗", "HTTP"]
 
 
 def is_junk_line(line: str) -> bool:
-    upper = line.upper()
-    return any(k in upper for k in JUNK_KW)
+    return any(k in line.upper() for k in JUNK_KW)
 
 
 def extract_source(lines: list[str]) -> str:
@@ -35,14 +34,17 @@ def extract_source(lines: list[str]) -> str:
             clean = line
             for prefix in ["Source:", "SOURCE:", "source:"]:
                 clean = clean.replace(prefix, "")
-            parts = [p for p in clean.split() if not p.startswith("http") and "🔗" not in p]
+            parts = [p for p in clean.split()
+                     if not p.startswith("http") and "🔗" not in p]
             result = " ".join(parts).strip()
             if result:
                 return result
     return ""
 
 
-def wrap_to_px(text: str, font, max_px: int, draw: ImageDraw.ImageDraw) -> list[str]:
+def wrap_to_px(text: str, font, max_px: int,
+               draw: ImageDraw.ImageDraw) -> list[str]:
+    """Word-wrap text (uppercased) so no line exceeds max_px wide."""
     words = text.upper().split()
     lines, cur = [], ""
     for w in words:
@@ -59,76 +61,85 @@ def wrap_to_px(text: str, font, max_px: int, draw: ImageDraw.ImageDraw) -> list[
     return lines
 
 
-async def generate_card(headline: str, subtext: str, source: str, photo_path: str):
+async def generate_card(headline: str, source: str, photo_path: str):
     W, H = 1080, 1080
 
     try:
-        f_badge = ImageFont.truetype(FONTS["bold"],   30)
-        f_head  = ImageFont.truetype(FONTS["bold"],   72)
-        f_sub   = ImageFont.truetype(FONTS["reg"],    36)
-        f_src   = ImageFont.truetype(FONTS["medium"], 30)
+        f_badge    = ImageFont.truetype(FONTS["bold"],   34)
+        f_breaking = ImageFont.truetype(FONTS["bold"],   44)
+        f_head     = ImageFont.truetype(FONTS["bold"],   78)
+        f_src      = ImageFont.truetype(FONTS["medium"], 38)
     except Exception:
-        f_badge = f_head = f_sub = f_src = ImageFont.load_default()
+        f_badge = f_breaking = f_head = f_src = ImageFont.load_default()
 
     # 1. Full-bleed photo background
     photo = Image.open(photo_path).convert("RGBA")
     pw, ph = photo.size
     scale  = max(W / pw, H / ph)
-    photo  = photo.resize((int(pw * scale), int(ph * scale)), Image.Resampling.LANCZOS)
+    photo  = photo.resize((int(pw * scale), int(ph * scale)),
+                          Image.Resampling.LANCZOS)
     ox = (photo.width  - W) // 2
     oy = (photo.height - H) // 2
     photo = photo.crop((ox, oy, ox + W, oy + H))
 
+    # 2. Blur the middle band to erase any baked-in text from source image
+    photo_rgb = photo.convert("RGB")
+    band = photo_rgb.crop((0, 440, W, 730))
+    band = band.filter(ImageFilter.GaussianBlur(radius=18))
+    photo_rgb.paste(band, (0, 440))
+    photo = photo_rgb.convert("RGBA")
+
     canvas = Image.new("RGBA", (W, H))
     canvas.paste(photo, (0, 0))
 
-    # 2. Transparent-to-black gradient overlay (photo visible at top)
+    # 3. Dark gradient overlay (transparent top → nearly opaque bottom)
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     od      = ImageDraw.Draw(overlay)
-    START   = int(H * 0.28)
+    START   = int(H * 0.18)
     for y in range(START, H):
         t     = (y - START) / (H - START)
-        alpha = int(248 * min(t ** 0.62, 1.0))
+        alpha = int(252 * min(t ** 0.42, 1.0))
         od.line([(0, y), (W, y)], fill=(0, 0, 0, alpha))
     canvas = Image.alpha_composite(canvas, overlay)
-
     draw   = ImageDraw.Draw(canvas)
-    MARGIN = 50
+
+    MARGIN = 52
     MAX_W  = W - 2 * MARGIN
 
-    # 3. LATEST badge
-    BX, BY   = 40, 40
-    BPX, BPY = 20, 10
+    # 4. LATEST badge (top-left red pill)
+    BX, BY   = MARGIN, 48
+    BPX, BPY = 22, 12
     bbox = draw.textbbox((0, 0), "LATEST", font=f_badge)
     bw   = bbox[2] - bbox[0] + BPX * 2
     bh   = bbox[3] - bbox[1] + BPY * 2
-    draw.rounded_rectangle([BX, BY, BX + bw, BY + bh], radius=6, fill=(211, 47, 47, 255))
+    draw.rounded_rectangle([BX, BY, BX + bw, BY + bh],
+                           radius=8, fill=(211, 47, 47, 255))
     draw.text((BX + BPX, BY + BPY), "LATEST", font=f_badge, fill="white")
 
-    # 4. Headline
+    # 5. BREAKING NEWS label with red left-bar accent
+    BREAK_Y = int(H * 0.50)
+    draw.rectangle([MARGIN, BREAK_Y + 6, MARGIN + 6, BREAK_Y + 46],
+                   fill=(211, 47, 47, 255))
+    draw.text((MARGIN + 18, BREAK_Y), "BREAKING NEWS",
+              font=f_breaking, fill="white")
+
+    # 6. Headline — large bold all-caps, pixel-safe wrapping
     head_lines = wrap_to_px(headline, f_head, MAX_W, draw)
-    LINE_H_H   = 82
-    HEAD_Y     = int(H * 0.50)
+    LINE_H_H   = 90
+    HEAD_Y     = BREAK_Y + 72
+
     for i, line in enumerate(head_lines):
         y = HEAD_Y + i * LINE_H_H
-        draw.text((MARGIN + 2, y + 2), line, font=f_head, fill=(0, 0, 0, 160))
+        draw.text((MARGIN + 2, y + 2), line, font=f_head, fill=(0, 0, 0, 190))
         draw.text((MARGIN,     y),     line, font=f_head, fill="white")
 
-    # 5. Subtext
-    if subtext:
-        sub_lines = wrap_to_px(subtext, f_sub, MAX_W, draw)
-        sub_top   = HEAD_Y + len(head_lines) * LINE_H_H + 18
-        for i, line in enumerate(sub_lines):
-            draw.text((MARGIN, sub_top + i * 50), line.title(),
-                      font=f_sub, fill=(215, 215, 215, 255))
-
-    # 6. Source with red dash
+    # 7. Source — red bar + grey text, pinned to bottom
     if source:
-        src_y = H - 56
-        draw.rectangle([MARGIN, src_y + 16, MARGIN + 30, src_y + 19],
+        bar_y = H - 100
+        draw.rectangle([MARGIN, bar_y, MARGIN + 50, bar_y + 5],
                        fill=(211, 47, 47, 255))
-        draw.text((MARGIN + 44, src_y), source,
-                  font=f_src, fill=(195, 195, 195, 255))
+        draw.text((MARGIN, bar_y + 14), source,
+                  font=f_src, fill=(210, 210, 210, 255))
 
     canvas.convert("RGB").save(IMG_PATH, quality=96)
     print(f"✅ Card saved → {IMG_PATH}")
@@ -164,16 +175,15 @@ async def main():
 
             headline = lines[0] if lines else "Breaking News"
             source   = extract_source(lines)
-            sub_lines = [l for l in lines[1:] if not is_junk_line(l)]
-            subtext   = " ".join(sub_lines[:2])
 
-            await generate_card(headline, subtext, source, TEMP_PATH)
+            await generate_card(headline, source, TEMP_PATH)
 
-            # IG caption
+            # IG caption — strip junk lines
             clean_lines   = [l for l in lines if not is_junk_line(l)]
             final_caption = "\n".join(clean_lines)
             final_caption += (
-                f"\n\n🏛️ Read the Full Story: Link in Bio @{IG_HANDLE} 🔗\n\n{HASHTAGS}"
+                f"\n\n🏛️ Read the Full Story: Link in Bio @{IG_HANDLE} 🔗"
+                f"\n\n{HASHTAGS}"
             )
             with open(CAP_PATH, "w", encoding="utf-8") as f:
                 f.write(final_caption)
@@ -182,7 +192,7 @@ async def main():
 
         except Exception as e:
             print(f"Error: {e}")
-            raise
+            raise   # re-raise so GitHub Actions marks step as failed
 
 
 if __name__ == "__main__":
