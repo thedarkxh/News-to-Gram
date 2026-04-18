@@ -6,10 +6,9 @@ import warnings
 from aiogram import Bot
 from instagrapi import Client
 
-# Suppress messy warnings in logs
+# Ignore cleanup warnings in logs
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# Secrets from GitHub Environment
 TOKEN = os.getenv("TOKEN")
 IG_SESSION = os.getenv("IG_SESSION")
 IG_USERNAME = os.getenv("IG_USERNAME")
@@ -18,63 +17,56 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 async def main():
     if not TOKEN or not IG_SESSION:
-        print("❌ Missing Secrets! Check your GitHub Actions settings.")
+        print("❌ ERROR: Missing Secrets.")
         return
 
     print("✅ Secrets verified. Initializing sync...")
-    # Use 'async with' to handle session cleanup automatically
+    # 'async with' ensures the Telegram connection closes properly
     async with Bot(token=TOKEN) as bot:
         ig_client = Client()
 
-        # 1. Instagram Authentication
+        # 1. Instagram Auth
         try:
-            print("🔄 Attempting login via session...")
             session_data = json.loads(IG_SESSION)
             ig_client.set_settings(session_data)
             ig_client.get_settings() 
-            print(f"✅ Successfully logged into Instagram as: {IG_USERNAME}")
+            print(f"✅ Logged into Instagram as: {IG_USERNAME}")
         except Exception as e:
-            print(f"⚠️ Session login failed: {e}")
+            print(f"⚠️ Session failed: {e}. Trying fallback...")
             try:
                 ig_client.login(IG_USERNAME, IG_PASSWORD)
-                print("✅ Password login successful!")
-            except Exception as login_err:
-                print(f"❌ Full Authentication Failure: {login_err}")
+            except:
                 return
 
-        # 2. Telegram Sync Logic
+        # 2. Telegram Scraper
         try:
-            print(f"📡 Scanning channel: {CHANNEL_ID} for news...")
-            updates = await bot.get_updates(limit=20, allowed_updates=["channel_post"])
+            print(f"📡 Scanning channel: {CHANNEL_ID}...")
+            # Increased limit to 30 to look further back in history
+            updates = await bot.get_updates(limit=30, allowed_updates=["channel_post"])
             
-            sync_success = False
             for update in reversed(updates):
                 if update.channel_post and update.channel_post.photo:
-                    print("📸 News post found! Syncing to Instagram...")
+                    print("📸 Photo found! Preparing for Instagram...")
                     
                     photo = update.channel_post.photo[-1]
                     file_info = await bot.get_file(photo.file_id)
                     photo_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}"
                     
-                    photo_path = "instagram_upload.jpg"
-                    with open(photo_path, "wb") as f:
+                    # Download and Upload
+                    with open("temp_news.jpg", "wb") as f:
                         f.write(requests.get(photo_url).content)
                     
-                    caption = update.channel_post.caption or "Breaking News Update"
+                    caption = update.channel_post.caption or "News Update"
+                    print("📤 Uploading...")
+                    media = ig_client.photo_upload("temp_news.jpg", caption)
+                    print(f"🚀 SUCCESS! IG Post ID: {media.pk}")
                     
-                    print("📤 Uploading media...")
-                    media = ig_client.photo_upload(photo_path, caption)
-                    print(f"🚀 SUCCESS! Post live at ID: {media.pk}")
-                    
-                    os.remove(photo_path)
-                    sync_success = True
-                    break 
+                    os.remove("temp_news.jpg")
+                    return # Stop after the first (newest) post
             
-            if not sync_success:
-                print("ℹ️ No photo posts found in the recent Telegram history.")
-
+            print("ℹ️ No recent photo posts detected. Post a new image to the channel and try again.")
         except Exception as e:
-            print(f"❌ Sync Process Error: {e}")
+            print(f"❌ Sync Error: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
