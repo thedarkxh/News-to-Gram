@@ -3,4 +3,4 @@ instagrapi
 requests
 python-dotenv
 telethon
-
+pillow
