@@ -16,7 +16,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        run: pip install aiogram requests
+        run: pip install aiogram requests Pillow
 
       - name: Run Generator
         env:
