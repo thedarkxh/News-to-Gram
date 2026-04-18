@@ -10,8 +10,6 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 TOKEN = os.getenv("TOKEN")
 IG_SESSION = os.getenv("IG_SESSION")
-IG_USERNAME = os.getenv("IG_USERNAME")
-IG_PASSWORD = os.getenv("IG_PASSWORD")
 CHANNEL_ID = os.getenv("CHANNEL_ID") 
 
 async def main():
@@ -19,56 +17,54 @@ async def main():
         print("❌ ERROR: Missing Secrets.")
         return
 
+    # 1. Instagram Setup
+    ig_client = Client()
+    try:
+        ig_client.set_settings(json.loads(IG_SESSION))
+        print("✅ Instagram Session Loaded")
+    except Exception as e:
+        print(f"❌ Instagram Error: {e}")
+        return
+
+    # 2. Telegram Bot Setup
     async with Bot(token=TOKEN) as bot:
-        ig_client = Client()
-
-        # 1. Instagram Login
         try:
-            ig_client.set_settings(json.loads(IG_SESSION))
-            ig_client.get_settings() 
-            print(f"✅ Logged into Instagram: {IG_USERNAME}")
-        except Exception as e:
-            print(f"❌ IG Auth Failed: {e}")
-            return
-
-        # 2. Fetching the specific post from the channel
-        try:
-            print(f"📡 Accessing channel: {CHANNEL_ID}")
+            print(f"📡 Scanning channel: {CHANNEL_ID}...")
             
-            # Direct check for the chat to ensure bot is an admin
-            chat = await bot.get_chat(CHANNEL_ID)
-            print(f"🔗 Targeted Channel: {chat.title}")
-
-            # We fetch updates WITHOUT offset. 
-            # This looks at the absolute latest message the bot has access to.
-            updates = await bot.get_updates(limit=10)
+            # offset=-1 forces the bot to skip all old messages 
+            # and look ONLY at the absolute latest update in the server's queue.
+            updates = await bot.get_updates(offset=-1, limit=1, timeout=10)
             
-            # Filter updates specifically for your channel ID
-            target_msg = None
-            for update in reversed(updates):
-                msg = update.channel_post
-                if msg and (str(msg.chat.id) == str(CHANNEL_ID) or msg.chat.username == str(CHANNEL_ID).replace('@','')):
-                    if msg.photo:
-                        target_msg = msg
-                        break
+            if not updates:
+                print("⚠️ No fresh updates found in the Telegram queue.")
+                print("👉 FIX: Post the news card to your channel NOW, then run this Action.")
+                return
 
-            if target_msg:
-                print(f"📸 Found headline: {target_msg.caption[:50]}...")
+            for update in updates:
+                # We check both channel_post and regular message
+                msg = update.channel_post if update.channel_post else update.message
                 
-                photo = target_msg.photo[-1]
-                file = await bot.get_file(photo.file_id)
-                url = f"https://api.telegram.org/file/bot{TOKEN}/{file.file_path}"
-                
-                with open("sync_card.jpg", "wb") as f:
-                    f.write(requests.get(url).content)
-                
-                print("📤 Syncing to Instagram...")
-                media = ig_client.photo_upload("sync_card.jpg", target_msg.caption)
-                print(f"🚀 SUCCESS! IG Post ID: {media.pk}")
-                
-                os.remove("sync_card.jpg")
-            else:
-                print("ℹ️ No media found in the buffer. Please post the news card to the channel AGAIN while this script is starting.")
+                if msg and msg.photo:
+                    print(f"📸 Found Post: {msg.caption[:50]}...")
+                    
+                    # Get high-res photo
+                    photo = msg.photo[-1]
+                    file = await bot.get_file(photo.file_id)
+                    url = f"https://api.telegram.org/file/bot{TOKEN}/{file.file_path}"
+                    
+                    # Download
+                    with open("temp_post.jpg", "wb") as f:
+                        f.write(requests.get(url).content)
+                    
+                    # Upload to IG
+                    print("📤 Syncing to Instagram...")
+                    media = ig_client.photo_upload("temp_post.jpg", msg.caption or "")
+                    print(f"🚀 SUCCESS! Instagram ID: {media.pk}")
+                    
+                    os.remove("temp_post.jpg")
+                    return
+                else:
+                    print("ℹ️ Found an update, but it wasn't a photo post.")
 
         except Exception as e:
             print(f"❌ Telegram Error: {e}")
