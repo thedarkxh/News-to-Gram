@@ -23,48 +23,46 @@ async def main():
         ig_client.set_settings(json.loads(IG_SESSION))
         print("✅ Instagram Session Loaded")
     except Exception as e:
-        print(f"❌ Instagram Error: {e}")
+        print(f"❌ Instagram Auth Error: {e}")
         return
 
     # 2. Telegram Bot Setup
     async with Bot(token=TOKEN) as bot:
         try:
-            print(f"📡 Scanning channel: {CHANNEL_ID}...")
+            print(f"📡 Fetching last post from: {CHANNEL_ID}...")
             
-            # offset=-1 forces the bot to skip all old messages 
-            # and look ONLY at the absolute latest update in the server's queue.
-            updates = await bot.get_updates(offset=-1, limit=1, timeout=10)
+            # Using a very high offset to grab the absolute last update available
+            updates = await bot.get_updates(offset=-1, limit=10)
             
-            if not updates:
-                print("⚠️ No fresh updates found in the Telegram queue.")
-                print("👉 FIX: Post the news card to your channel NOW, then run this Action.")
+            # We filter through the last few updates to find the most recent photo
+            target_msg = None
+            for update in reversed(updates):
+                msg = update.channel_post
+                if msg and msg.photo:
+                    target_msg = msg
+                    break
+            
+            if not target_msg:
+                print("ℹ️ No photo posts found in the Telegram cache.")
+                print("👉 Note: Bots can only see history from the moment they are added to the channel.")
                 return
 
-            for update in updates:
-                # We check both channel_post and regular message
-                msg = update.channel_post if update.channel_post else update.message
-                
-                if msg and msg.photo:
-                    print(f"📸 Found Post: {msg.caption[:50]}...")
-                    
-                    # Get high-res photo
-                    photo = msg.photo[-1]
-                    file = await bot.get_file(photo.file_id)
-                    url = f"https://api.telegram.org/file/bot{TOKEN}/{file.file_path}"
-                    
-                    # Download
-                    with open("temp_post.jpg", "wb") as f:
-                        f.write(requests.get(url).content)
-                    
-                    # Upload to IG
-                    print("📤 Syncing to Instagram...")
-                    media = ig_client.photo_upload("temp_post.jpg", msg.caption or "")
-                    print(f"🚀 SUCCESS! Instagram ID: {media.pk}")
-                    
-                    os.remove("temp_post.jpg")
-                    return
-                else:
-                    print("ℹ️ Found an update, but it wasn't a photo post.")
+            print(f"📸 Found Post: {target_msg.caption[:50]}...")
+            
+            # Download the highest resolution photo
+            photo = target_msg.photo[-1]
+            file = await bot.get_file(photo.file_id)
+            url = f"https://api.telegram.org/file/bot{TOKEN}/{file.file_path}"
+            
+            with open("last_news.jpg", "wb") as f:
+                f.write(requests.get(url).content)
+            
+            # Upload to Instagram
+            print("📤 Syncing to Instagram...")
+            media = ig_client.photo_upload("last_news.jpg", target_msg.caption or "")
+            print(f"🚀 SUCCESS! Instagram Post ID: {media.pk}")
+            
+            os.remove("last_news.jpg")
 
         except Exception as e:
             print(f"❌ Telegram Error: {e}")
