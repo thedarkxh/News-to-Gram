@@ -19,13 +19,11 @@ async def main():
     async with Bot(token=TOKEN) as bot:
         try:
             print(f"📡 Fetching latest card from {CHANNEL_ID}...")
-            # Grab updates
             updates = await bot.get_updates(offset=-1, limit=5)
             
             target_msg = None
-            # FIX: Properly iterate through Update objects to find the channel_post
             for upd in reversed(updates):
-                msg = upd.channel_post # Updates contain the message in channel_post
+                msg = upd.channel_post 
                 if msg and msg.photo:
                     target_msg = msg
                     break
@@ -33,8 +31,6 @@ async def main():
             if not target_msg:
                 print("ℹ️ No recent news cards found.")
                 return
-
-            print(f"📸 Found News Card: {target_msg.caption[:30] if target_msg.caption else 'No Caption'}...")
 
             # 1. Download Image
             photo = target_msg.photo[-1]
@@ -49,25 +45,24 @@ async def main():
             raw_caption = target_msg.caption or ""
             lines = raw_caption.split('\n')
             
-            # Clean junk and merge last lines
-            # We remove source links and "Related" channel promos
+            # Updated Filter: Keeps "SOURCE:" but removes the long links/related promos
             clean_lines = [
                 line for line in lines 
-                if line.strip() and not any(word in line.upper() for word in ["SOURCE:", "READ FULL STORY", "RELATED:", "JOIN"])
+                if line.strip() and not any(word in line.upper() for word in ["READ FULL STORY", "RELATED:", "JOIN"])
             ]
             
             news_content = "\n".join(clean_lines).strip()
             
-            # Unified CTA with redirect to your account
+            # Unified CTA with redirect
             new_cta = f"🏛️ Read the Full Story: Link in Bio @{IG_HANDLE} 🔗"
             
-            # Final assembly
+            # Final assembly: News Content (includes Source) + CTA + Tags
             final_caption = f"{news_content}\n\n{new_cta}\n\n{HASHTAGS}"
 
             with open("post_caption.txt", "w", encoding="utf-8") as f:
                 f.write(final_caption)
 
-            print(f"✅ Success! Files generated for @{IG_HANDLE}")
+            print(f"✅ Success! Caption generated with Source, CTA, and Tags.")
 
         except Exception as e:
             print(f"❌ Error: {e}")
