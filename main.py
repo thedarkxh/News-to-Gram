@@ -3,122 +3,145 @@ import asyncio
 import requests
 import textwrap
 from aiogram import Bot
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 # ── Config ─────────────────────────────────────────────────────────────
 TOKEN      = os.getenv("TOKEN")
 IG_HANDLE  = "deepdive.group"
-HASHTAGS   = "#news #breakingnews #currentaffairs #upsc #india #trending"
-
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 IMG_PATH   = os.path.join(BASE_DIR, "post_image.jpg")
 TEMP_PATH  = os.path.join(BASE_DIR, "temp.jpg")
 CAP_PATH   = os.path.join(BASE_DIR, "post_caption.txt")
 
-def get_safe_font(size):
-    """
-    Tries multiple Linux system fonts to ensure readability.
-    GitHub Runners usually have DejaVu or Liberation.
-    """
-    font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "Poppins-Bold.ttf" # If you uploaded it
-    ]
-    for path in font_paths:
-        if os.path.exists(path):
-            return ImageFont.truetype(path, size)
-    return ImageFont.load_default()
+# CRITICAL: We use standard paths for fonts pre-installed on Linux servers
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-async def generate_fixed_card(headline, source, photo_path):
+def sanitize_text(text: str) -> str:
+    """Rigorous cleaning to remove emojis, broken chars, and 'weird boxes'."""
+    # Keeps ASCII 32-126 (Standard English letters, numbers, and symbols)
+    return text.encode('ascii', 'ignore').decode('ascii').strip()
+
+def wrap_text_to_px(text: str, font, max_px: int, draw: ImageDraw.ImageDraw) -> list[str]:
+    """Wraps text precisely, ensuring no line exceeds max_px wide."""
+    cleaned = sanitize_text(text).upper()
+    words = cleaned.split()
+    lines, cur = [], ""
+    
+    for w in words:
+        test = (cur + " " + w).strip()
+        bb = draw.textbbox((0, 0), test, font=font)
+        if bb[2] - bb[0] <= max_px:
+            cur = test
+        else:
+            if cur: lines.append(cur)
+            cur = w
+    if cur: lines.append(cur)
+    return lines
+
+async def generate_premium_card(headline, source, photo_path):
     W, H = 1080, 1080
     
-    # 1. Background Setup
-    bg = Image.open(photo_path).convert("RGB")
-    ratio = max(W/bg.width, H/bg.height)
-    bg = bg.resize((int(bg.width*ratio), int(bg.height*ratio)), Image.LANCZOS)
-    bg = bg.crop(((bg.width-W)//2, (bg.height-H)//2, (bg.width+W)//2, (bg.height+H)//2))
+    # 1. Image Processing: Full-Bleed Crop
+    photo = Image.open(photo_path).convert("RGB")
+    pw, ph = photo.size
+    scale = max(W / pw, H / ph)
+    photo = photo.resize((int(pw * scale), int(ph * scale)), Image.Resampling.LANCZOS)
+    photo = photo.crop(((photo.width-W)//2, (photo.height-H)//2, (photo.width+W)//2, (photo.height+H)//2))
 
-    # 2. Heavy Gradient (Ensures readability on ANY image)
-    # We are making the bottom half significantly darker
-    overlay = Image.new('RGBA', (W, H), (0, 0, 0, 0))
-    draw_ov = ImageDraw.Draw(overlay)
-    for y in range(450, H):
-        # Steeper curve for maximum contrast
-        alpha = int(255 * ((y - 450) / 630) ** 1.1)
-        draw_ov.line([(0, y), (W, y)], fill=(0, 0, 0, min(alpha, 255)))
-    bg.paste(overlay, (0, 0), overlay)
+    # 2. Add Depth/Overlay (Transparent top → 80% opacity bottom fade)
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    for y in range(400, H):
+        # Quadratic blend ensures face visibility while darkening text zone
+        alpha = int(210 * ((y - 400) / 680)**1.2)
+        od.line([(0, y), (W, y)], fill=(0, 0, 0, alpha))
+    
+    canvas = Image.alpha_composite(photo.convert("RGBA"), overlay)
+    draw = ImageDraw.Draw(canvas)
 
-    draw = ImageDraw.Draw(bg)
-    
-    # 3. Forced Headline Rendering
-    # Using a slightly smaller character width (18) to ensure it doesn't bleed off
-    headline_clean = headline.upper().strip()
-    wrapped_lines = textwrap.wrap(headline_clean, width=18) 
-    
-    # Determine Font Size - Large for impact
-    font_size = 82
-    h_font = get_safe_font(font_size)
-    
-    # Start drawing from the bottom up based on line count
-    margin_x = 70
-    line_spacing = 95
-    total_text_height = len(wrapped_lines) * line_spacing
-    current_y = (H - 150) - total_text_height 
+    # 3. Fonts: Dynamically scaled for readability
+    try:
+        f_badge    = ImageFont.truetype(FONT_PATH, 34)
+        f_breaking = ImageFont.truetype(FONT_PATH, 44)
+        f_head     = ImageFont.truetype(FONT_PATH, 80) # Increased size for impact
+        f_src      = ImageFont.truetype(FONT_PATH, 38)
+    except Exception:
+        # Fallback if server lacks proper fonts
+        f_badge = f_breaking = f_head = f_src = ImageFont.load_default()
 
+    # Text Area Settings
+    margin = 60
+    
+    # 4. Drawing: Brand Elements
+    # LATEST Badge
+    bbox = draw.textbbox((0,0), "LATEST", font=f_badge)
+    b_w = (bbox[2] - bbox[0]) + 40 # text width + padding
+    draw.rectangle([margin, 60, margin + b_w, 115], fill=(211, 47, 47))
+    draw.text((margin + 20, 68), "LATEST", font=f_badge, fill="white")
+
+    # Breaking News Tag
+    draw.rectangle([margin, 700, margin + 8, 750], fill=(211, 47, 47))
+    draw.text((margin + 25, 706), "BREAKING NEWS", font=f_breaking, fill="white")
+
+    # 5. Drawing: Headline with Shadow (to prevent invisible text on white background)
+    wrapped_lines = wrap_text_to_px(headline, f_head, W - (margin * 2), draw)
+    
+    current_y = 770
     for line in wrapped_lines:
-        # HIGH VISIBILITY: Draw a thick black border/shadow around the text
-        # This is the 'secret sauce' for readability on parliament/busy backgrounds
-        for offset in [(-2, -2), (2, -2), (-2, 2), (2, 2)]:
-            draw.text((margin_x + offset[0], current_y + offset[1]), line, font=h_font, fill="black")
-        
-        # Main White Text
-        draw.text((margin_x, current_y), line, font=h_font, fill="white")
-        current_y += line_spacing
+        # Subtle Drop Shadow (Black with 150 opacity)
+        draw.text((margin + 3, current_y + 3), line, font=f_head, fill=(0, 0, 0, 150))
+        # Main Text
+        draw.text((margin, current_y), line, font=f_head, fill="white")
+        current_y += 100
 
-    # 4. Source Bar (Pinned to bottom)
+    # 6. Drawing: Source Footer
     if source:
-        src_font = get_safe_font(30)
-        draw.rectangle([margin_x, H-100, margin_x+80, H-95], fill=(211, 47, 47))
-        draw.text((margin_x, H-80), f"SOURCE: {source.upper()}", font=src_font, fill=(200, 200, 200))
+        # Use sanitized source text for footer
+        draw.text((margin, H - 100), f"SOURCE: {sanitize_text(source).upper()}", font=f_src, fill=(200, 200, 200))
 
-    # 5. LATEST Tag (Top Left)
-    draw.rectangle([margin_x, 60, margin_x+200, 110], fill=(211, 47, 47))
-    draw.text((margin_x+100, 85), "LATEST", font=get_safe_font(32), fill="white", anchor="mm")
-
-    bg.save(IMG_PATH, quality=98)
+    canvas.convert("RGB").save(IMG_PATH, quality=95)
 
 async def main():
     async with Bot(token=TOKEN) as bot:
         try:
             updates = await bot.get_updates(offset=-1, limit=5)
-            post = next((u.channel_post for u in reversed(updates) if u.channel_post and u.channel_post.photo), None)
+            target = next((u.channel_post for u in reversed(updates) if u.channel_post and u.channel_post.photo), None)
             
-            if not post:
-                print("No photo post found.")
+            if not target:
+                print("No recent photo post found.")
                 return
 
             # Download Photo
-            file = await bot.get_file(post.photo[-1].file_id)
+            file_info = await bot.get_file(target.photo[-1].file_id)
+            img_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}"
             with open(TEMP_PATH, "wb") as f:
-                f.write(requests.get(f"https://api.telegram.org/file/bot{TOKEN}/{file.file_path}").content)
+                f.write(requests.get(img_url).content)
 
-            # Process Text
-            caption = post.caption or ""
-            lines = [l.strip() for l in caption.split("\n") if l.strip()]
-            headline = lines[0] if lines else "NEWS UPDATE"
-            source = next((l.split(":")[-1].strip() for l in lines if "SOURCE" in l.upper()), "")
+            # Process Caption Text
+            raw_text = target.caption or ""
+            lines = [l.strip() for l in raw_text.split("\n") if l.strip()]
+            
+            headline = lines[0] if lines else "BREAKING NEWS"
+            
+            # Smart Source extraction: find the line with 'SOURCE' and isolate the name
+            raw_source = next((l for l in lines if "SOURCE" in l.upper()), "Various")
+            source_name = raw_source.upper().replace("SOURCE:", "").strip()
 
-            # 1. ALWAYS save caption first so you don't lose it
+            # 1. CREATE IMAGE: Clean, professional, dynamic formatting
+            await generate_premium_card(headline, source_name, TEMP_PATH)
+
+            # 2. CREATE CAPTION: Generate the .txt file for Instagram upload
+            junk_keywords = ["READ FULL STORY", "RELATED", "JOIN", "🔗"]
+            clean_lines = [l for l in lines if not any(j in l.upper() for j in junk_keywords)]
+            final_cap = "\n".join(clean_lines).strip()
+            final_cap += f"\n\n🏛️ Read Full Story: Link in Bio @{IG_HANDLE}\n\n{HASHTAGS}"
             with open(CAP_PATH, "w", encoding="utf-8") as f:
-                f.write(f"{caption}\n\n🏛️ Read Full Story: Link in Bio @{IG_HANDLE}\n\n{HASHTAGS}")
+                f.write(final_cap)
 
-            # 2. Generate Image with high-contrast logic
-            await generate_fixed_card(headline, source, TEMP_PATH)
-            print("✅ Fixed: Headline rendered with outline for readability.")
+            print("✅ Success: Card and Caption generated.")
 
         except Exception as e:
-            print(f"❌ Critical Error: {e}")
+            print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
