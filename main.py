@@ -1,155 +1,129 @@
 import os
 import asyncio
 import requests
+import textwrap
 from aiogram import Bot
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-import re
 
 # ── Config ─────────────────────────────────────────────────────────────
 TOKEN      = os.getenv("TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
 IG_HANDLE  = "deepdive.group"
 HASHTAGS   = "#news #breakingnews #currentaffairs #upsc #india #trending"
 
-# Use absolute paths to ensure GitHub Actions finds them
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 IMG_PATH   = os.path.join(BASE_DIR, "post_image.jpg")
 TEMP_PATH  = os.path.join(BASE_DIR, "temp.jpg")
 CAP_PATH   = os.path.join(BASE_DIR, "post_caption.txt")
 
-# CRITICAL: If these files aren't in your repo, the script will use default tiny fonts
-# Place Poppins-Bold.ttf in your root folder!
-FONT_BOLD = os.path.join(BASE_DIR, "Poppins-Bold.ttf")
-FONT_MED  = os.path.join(BASE_DIR, "Poppins-Medium.ttf")
+# Use DejaVuSans as it is pre-installed on almost all Linux/GitHub environments
+BOLD_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+REG_FONT  = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
-JUNK_KW = ["READ FULL STORY", "RELATED", "JOIN", "SOURCE", "🔗", "HTTP"]
-
-def clean_text(text: str) -> str:
-    """Removes emojis and symbols that cause 'boxes' in standard fonts."""
-    return re.sub(r'[^\x00-\x7F]+', '', text).strip()
-
-def is_junk_line(line: str) -> bool:
-    return any(k in line.upper() for k in JUNK_KW)
-
-def extract_source(lines: list[str]) -> str:
-    for line in lines:
-        if "SOURCE" in line.upper():
-            clean = line.replace("Source:", "").replace("SOURCE:", "").replace("source:", "")
-            parts = [p for p in clean.split() if not p.startswith("http") and "🔗" not in p]
-            return " ".join(parts).strip()
-    return ""
-
-def wrap_to_px(text: str, font, max_px: int, draw: ImageDraw.ImageDraw) -> list[str]:
-    words = text.upper().split()
-    lines, cur = [], ""
-    for w in words:
-        test = (cur + " " + w).strip()
-        bb = draw.textbbox((0, 0), test, font=font)
-        if bb[2] - bb[0] <= max_px:
-            cur = test
-        else:
-            if cur: lines.append(cur)
-            cur = w
-    if cur: lines.append(cur)
-    return lines
-
-async def generate_card(headline: str, source: str, photo_path: str):
-    W, H = 1080, 1080
-    
-    # Improved Font Loading
+def get_font(path, size):
     try:
-        f_badge    = ImageFont.truetype(FONT_BOLD, 34)
-        f_breaking = ImageFont.truetype(FONT_BOLD, 44)
-        f_head     = ImageFont.truetype(FONT_BOLD, 85) # Increased size
-        f_src      = ImageFont.truetype(FONT_MED, 38)
+        return ImageFont.truetype(path, size)
     except:
-        print("⚠️ Custom fonts not found. Using default.")
-        f_badge = f_breaking = f_head = f_src = ImageFont.load_default()
+        return ImageFont.load_default()
 
-    # 1. Background
-    photo = Image.open(photo_path).convert("RGBA")
-    scale = max(W / photo.width, H / photo.height)
-    photo = photo.resize((int(photo.width * scale), int(photo.height * scale)), Image.Resampling.LANCZOS)
-    photo = photo.crop(((photo.width-W)//2, (photo.height-H)//2, (photo.width+W)//2, (photo.height+H)//2))
+def wrap_text(text, font, max_width, draw):
+    """Wraps text accurately based on pixel width."""
+    words = text.split()
+    lines = []
+    current_line = []
+    for word in words:
+        test_line = ' '.join(current_line + [word])
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        if (bbox[2] - bbox[0]) <= max_width:
+            current_line.append(word)
+        else:
+            lines.append(' '.join(current_line))
+            current_line = [word]
+    lines.append(' '.join(current_line))
+    return [l for l in lines if l]
 
-    # 2. Dark Gradient (Ensures white text is visible)
-    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    od = ImageDraw.Draw(overlay)
-    for y in range(400, H): # Gradient starts from middle
-        alpha = int(220 * ((y - 400) / 680)**0.6)
-        od.line([(0, y), (W, y)], fill=(0, 0, 0, alpha))
+async def generate_optimized_card(headline, source, photo_path):
+    # --- SUPER-SAMPLING (Render at 2160x2160 for sharpness) ---
+    SCALE = 2
+    W, H = 1080 * SCALE, 1080 * SCALE
+    MARGIN = 70 * SCALE
+
+    bg = Image.open(photo_path).convert("RGB")
     
-    canvas = Image.alpha_composite(photo, overlay)
-    draw = ImageDraw.Draw(canvas)
+    # 1. Resize and Center Crop
+    ratio = max(W/bg.width, H/bg.height)
+    bg = bg.resize((int(bg.width*ratio), int(bg.height*ratio)), Image.LANCZOS)
+    bg = bg.crop(((bg.width-W)//2, (bg.height-H)//2, (bg.width+W)//2, (bg.height+H)//2))
 
-    # 3. Text Elements
-    margin = 60
+    # 2. Advanced Gradient Mask (Bottom 40%)
+    overlay = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    draw_ov = ImageDraw.Draw(overlay)
+    for y in range(int(H * 0.55), H):
+        # Quadratic fade for premium look
+        alpha = int(255 * ((y - (H * 0.55)) / (H * 0.45)) ** 1.4)
+        draw_ov.line([(0, y), (W, y)], fill=(0, 0, 0, min(alpha, 245)))
+    bg.paste(overlay, (0, 0), overlay)
+
+    draw = ImageDraw.Draw(bg)
+
+    # 3. Branding "LATEST" Tag
+    tag_w, tag_h = 200 * SCALE, 55 * SCALE
+    draw.rectangle([MARGIN, 80 * SCALE, MARGIN + tag_w, 80 * SCALE + tag_h], fill=(211, 47, 47))
+    draw.text((MARGIN + tag_w//2, 80 * SCALE + tag_h//2), "LATEST", 
+              font=get_font(BOLD_FONT, 32 * SCALE), fill="white", anchor="mm")
+
+    # 4. Headline Logic
+    h_font = get_font(BOLD_FONT, 78 * SCALE)
+    headline_clean = headline.upper().replace("🔗", "").strip()
+    wrapped = wrap_text(headline_clean, h_font, W - (MARGIN * 2), draw)
     
-    # Breaking News Tag
-    draw.rectangle([margin, 600, margin + 8, 650], fill=(211, 47, 47, 255))
-    draw.text((margin + 20, 605), "BREAKING NEWS", font=f_breaking, fill="white")
-
-    # Headline - Cleaned of emojis to prevent boxes
-    clean_head = clean_text(headline)
-    head_lines = wrap_to_px(clean_head, f_head, W - (margin * 2), draw)
+    # Position text starting from bottom-middle
+    y_cursor = H - (len(wrapped) * (95 * SCALE)) - (160 * SCALE)
     
-    y_cursor = 670
-    for line in head_lines:
-        # Shadow for readability
-        draw.text((margin+2, y_cursor+2), line, font=f_head, fill=(0,0,0,150))
-        draw.text((margin, y_cursor), line, font=f_head, fill="white")
-        y_cursor += 100
+    for line in wrapped:
+        # High-opacity shadow for text pop
+        draw.text((MARGIN + 4, y_cursor + 4), line, font=h_font, fill=(0, 0, 0, 220))
+        draw.text((MARGIN, y_cursor), line, font=h_font, fill="white")
+        y_cursor += 100 * SCALE
 
-    # 4. Source
+    # 5. Source Bar
     if source:
-        src_text = f"SOURCE: {clean_text(source)}"
-        draw.text((margin, H - 100), src_text, font=f_src, fill=(200, 200, 200, 255))
+        src_font = get_font(REG_FONT, 34 * SCALE)
+        draw.rectangle([MARGIN, H - 100 * SCALE, MARGIN + 100 * SCALE, H - 95 * SCALE], fill=(211, 47, 47))
+        draw.text((MARGIN, H - 80 * SCALE), f"SOURCE: {source.upper()}", font=src_font, fill=(190, 190, 190))
 
-    canvas.convert("RGB").save(IMG_PATH, quality=95)
+    # 6. Final Downscale (This makes text edges look extremely smooth)
+    final_img = bg.resize((1080, 1080), Image.Resampling.LANCZOS)
+    final_img.save(IMG_PATH, quality=95, subsampling=0)
 
 async def main():
     async with Bot(token=TOKEN) as bot:
         try:
             updates = await bot.get_updates(offset=-1, limit=5)
-            # Find last post with photo
-            target = None
-            for u in reversed(updates):
-                if u.channel_post and u.channel_post.photo:
-                    target = u.channel_post
-                    break
+            post = next((u.channel_post for u in reversed(updates) if u.channel_post and u.channel_post.photo), None)
             
-            if not target:
-                print("❌ No photo post found.")
-                return
+            if not post: return
 
-            # Download Photo
-            file = await bot.get_file(target.photo[-1].file_id)
-            img_url = f"https://api.telegram.org/file/bot{TOKEN}/{file.file_path}"
+            # Download
+            file = await bot.get_file(post.photo[-1].file_id)
             with open(TEMP_PATH, "wb") as f:
-                f.write(requests.get(img_url).content)
+                f.write(requests.get(f"https://api.telegram.org/file/bot{TOKEN}/{file.file_path}").content)
 
-            # Process Text
-            caption = target.caption or ""
+            # Text Processing
+            caption = post.caption or ""
             lines = [l.strip() for l in caption.split("\n") if l.strip()]
             headline = lines[0] if lines else "BREAKING NEWS"
-            source = extract_source(lines)
+            source = next((l.split(":")[-1].strip() for l in lines if "SOURCE" in l.upper()), "")
 
-            # Generate the image
-            await generate_card(headline, source, TEMP_PATH)
-
-            # Generate the caption file
-            clean_lines = [l for l in lines if not is_junk_line(l)]
-            final_cap = "\n".join(clean_lines)
-            final_cap += f"\n\n🏛️ Read Full Story: Link in Bio @{IG_HANDLE}\n\n{HASHTAGS}"
-            
+            # SAVE CAPTION FIRST
             with open(CAP_PATH, "w", encoding="utf-8") as f:
-                f.write(final_cap)
+                f.write(f"{caption}\n\n🏛️ Read Full Story: Link in Bio @{IG_HANDLE}\n\n{HASHTAGS}")
 
-            print("✅ Card & Caption generated successfully.")
+            # GENERATE IMAGE
+            await generate_optimized_card(headline, source, TEMP_PATH)
+            print("✅ Success: Optimized Card & Caption created.")
 
         except Exception as e:
             print(f"❌ Error: {e}")
-            raise
 
 if __name__ == "__main__":
     asyncio.run(main())
