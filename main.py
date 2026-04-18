@@ -22,7 +22,7 @@ async def main():
     async with Bot(token=TOKEN) as bot:
         ig_client = Client()
 
-        # 1. Instagram Auth
+        # 1. Instagram Authentication
         try:
             ig_client.set_settings(json.loads(IG_SESSION))
             ig_client.get_settings() 
@@ -31,41 +31,44 @@ async def main():
             print(f"❌ IG Auth Failed: {e}")
             return
 
-        # 2. Grab the specific news card
+        # 2. Fetching from Channel History
         try:
-            print(f"📡 Fetching latest from channel: {CHANNEL_ID}")
+            print(f"📡 Accessing channel history: {CHANNEL_ID}")
             
-            # Using get_chat to verify connection
+            # Using get_chat to confirm we have the right ID
             chat = await bot.get_chat(CHANNEL_ID)
-            print(f"🔗 Connected to: {chat.title}")
+            print(f"🔗 Targeted Channel: {chat.title}")
 
-            # Looking for the most recent message in the channel buffer
-            updates = await bot.get_updates(limit=10, offset=-1)
+            # Fetch the most recent message directly from the channel
+            # offset=-1 tells Telegram to start from the very last message
+            updates = await bot.get_updates(offset=-1, limit=1)
             
-            found = False
-            for update in reversed(updates):
+            if not updates:
+                print("ℹ️ No new updates found. Post a NEW photo to the channel and run again.")
+                return
+
+            for update in updates:
                 msg = update.channel_post
-                if msg and msg.chat.id == int(CHANNEL_ID) and msg.photo:
+                if msg and msg.photo:
                     print(f"📸 Found headline: {msg.caption[:50]}...")
                     
+                    # Get the highest resolution photo
                     photo = msg.photo[-1]
                     file = await bot.get_file(photo.file_id)
                     url = f"https://api.telegram.org/file/bot{TOKEN}/{file.file_path}"
                     
+                    # Download locally
                     img_data = requests.get(url).content
-                    with open("news_card.jpg", "wb") as f:
+                    with open("sync_card.jpg", "wb") as f:
                         f.write(img_data)
                     
-                    print("📤 Uploading to Instagram...")
-                    media = ig_client.photo_upload("news_card.jpg", msg.caption)
-                    print(f"🚀 SUCCESS! Post ID: {media.pk}")
+                    # Upload to Instagram
+                    print("📤 Posting to Instagram...")
+                    media = ig_client.photo_upload("sync_card.jpg", msg.caption)
+                    print(f"🚀 SUCCESS! IG Post ID: {media.pk}")
                     
-                    os.remove("news_card.jpg")
-                    found = True
-                    break
-
-            if not found:
-                print("ℹ️ No media found. Try posting a NEW photo to the channel now.")
+                    os.remove("sync_card.jpg")
+                    return # Exit after one successful sync
 
         except Exception as e:
             print(f"❌ Telegram Error: {e}")
