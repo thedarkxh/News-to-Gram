@@ -6,7 +6,6 @@ import warnings
 from aiogram import Bot
 from instagrapi import Client
 
-# Ignore cleanup warnings in logs
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 TOKEN = os.getenv("TOKEN")
@@ -17,56 +16,60 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 async def main():
     if not TOKEN or not IG_SESSION:
-        print("❌ ERROR: Missing Secrets.")
+        print("❌ ERROR: Secrets not found.")
         return
 
-    print("✅ Secrets verified. Initializing sync...")
-    # 'async with' ensures the Telegram connection closes properly
     async with Bot(token=TOKEN) as bot:
         ig_client = Client()
 
-        # 1. Instagram Auth
+        # 1. Instagram Login
         try:
-            session_data = json.loads(IG_SESSION)
-            ig_client.set_settings(session_data)
+            ig_client.set_settings(json.loads(IG_SESSION))
             ig_client.get_settings() 
-            print(f"✅ Logged into Instagram as: {IG_USERNAME}")
+            print(f"✅ Logged into Instagram: {IG_USERNAME}")
         except Exception as e:
-            print(f"⚠️ Session failed: {e}. Trying fallback...")
-            try:
-                ig_client.login(IG_USERNAME, IG_PASSWORD)
-            except:
+            print(f"⚠️ Session failed: {e}")
+            return
+
+        # 2. Advanced Telegram Search
+        try:
+            print(f"📡 Force-scanning channel: {CHANNEL_ID}")
+            
+            # We use a very high limit to ensure we catch the morning posts
+            updates = await bot.get_updates(limit=100, offset=-1)
+            
+            if not updates:
+                # If get_updates is empty, we try a fallback check
+                print("⚠️ get_updates returned nothing. Try posting a NEW photo now.")
                 return
 
-        # 2. Telegram Scraper
-        try:
-            print(f"📡 Scanning channel: {CHANNEL_ID}...")
-            # Increased limit to 30 to look further back in history
-            updates = await bot.get_updates(limit=30, allowed_updates=["channel_post"])
-            
             for update in reversed(updates):
-                if update.channel_post and update.channel_post.photo:
-                    print("📸 Photo found! Preparing for Instagram...")
+                # Check for channel posts specifically
+                content = update.channel_post if update.channel_post else update.message
+                
+                if content and content.photo:
+                    print("📸 Found the News Card! Downloading...")
                     
-                    photo = update.channel_post.photo[-1]
-                    file_info = await bot.get_file(photo.file_id)
-                    photo_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}"
+                    photo = content.photo[-1]
+                    file = await bot.get_file(photo.file_id)
+                    url = f"https://api.telegram.org/file/bot{TOKEN}/{file.file_path}"
                     
-                    # Download and Upload
-                    with open("temp_news.jpg", "wb") as f:
-                        f.write(requests.get(photo_url).content)
+                    with open("upload.jpg", "wb") as f:
+                        f.write(requests.get(url).content)
                     
-                    caption = update.channel_post.caption or "News Update"
-                    print("📤 Uploading...")
-                    media = ig_client.photo_upload("temp_news.jpg", caption)
-                    print(f"🚀 SUCCESS! IG Post ID: {media.pk}")
+                    caption = content.caption or "News Update"
                     
-                    os.remove("temp_news.jpg")
-                    return # Stop after the first (newest) post
+                    print("📤 Syncing to Instagram...")
+                    media = ig_client.photo_upload("upload.jpg", caption)
+                    print(f"🚀 SUCCESS! Post live: {media.pk}")
+                    
+                    os.remove("upload.jpg")
+                    return 
+
+            print("ℹ️ Still no photos found. Telegram is hiding old updates from the bot.")
             
-            print("ℹ️ No recent photo posts detected. Post a new image to the channel and try again.")
         except Exception as e:
-            print(f"❌ Sync Error: {e}")
+            print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
